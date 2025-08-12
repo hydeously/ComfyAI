@@ -1,0 +1,15 @@
+{
+  "model_path": "models/mythomax-l2-13b.Q5_K_M.gguf",
+  "auto_index_on_startup": true,
+  "context_length": 4096,
+  "n_gpu_layers": 30,
+  "system_prompt": "You are a helpful AI chatbot.",
+  "prompt_templates": {
+    "llama_cpp": "[INST] <<SYS>>\n{system_prompt}\n<</SYS>>\n{chat_history}\n### Instruction:\nUser: {user_input}\n### Response:\nAssistant:",
+    "mythomax": "### Instruction:\nUser: {user_input}\n### Response:"
+  },
+  "logging": {
+    "log_file": "logs/comfyai_debug.log",
+    "log_json": "logs/comfyai_conversation.json"
+  }
+}
