@@ -8,8 +8,6 @@ import threading
 from datetime import datetime
 from contextlib import contextmanager
 from llama_cpp import Llama
-from memory_manager import MemoryManager
-from vector_db_manager import VectorDBManager
 from utils import (
     load_config,
     format_prompt,
@@ -20,12 +18,6 @@ from utils import (
 
 # Global threading Event for animation control
 loading_flag = threading.Event()
-
-# Load helper models (paths & vault_path from config)
-vault_path = "C:/Users/Hyde/Documents/Obsidian/obsidianlib"
-memory_model_path = "models/rocket-3b.Q4_K_M.gguf"
-embedding_model_name = "all-MiniLM-L6-v2"
-memory_manager = MemoryManager(memory_model_path, vault_path)
 
 # ANSI color codes for CMD compatibility
 COLOR_RESET = "\033[0m"
@@ -150,14 +142,12 @@ def main():
     Main CLI loop: parses arguments, loads config and model, handles user input,
     shows loading animation while model generates response, logs and prints output.
     """
-    config = load_config()
-    auto_index = config.get("auto_index_on_startup", True)
-    vector_db_manager = VectorDBManager(vault_path, auto_index=auto_index)
-
     parser = argparse.ArgumentParser(description="ComfyAI CLI")
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--chat", action="store_true", help="Run in chat mode (default)")
     group.add_argument("--debug", action="store_true", help="Run in debug mode")
+
     args = parser.parse_args()
 
     # Default to chat mode if neither specified
@@ -200,7 +190,7 @@ def main():
     chat_history = []
     system_prompt = config["system_prompt"]
     llama_template = config["prompt_templates"]["llama_cpp"]
-    commands = ['clear', 'restart', 'help', 'exit', 'memory', 'memorylast', 'reindex']
+    commands = ['clear', 'restart', 'help', 'exit']
 
     global loading_flag
 
@@ -228,54 +218,12 @@ def main():
                         "/help    - Show this help message\n"
                         "/exit    - Quit the program"
                     )
-                elif cmd == 'memory':
-                    text_to_save = user_input[len('/memory'):].strip()
-                    if text_to_save:
-                        saved = memory_manager.save_explicit_memory(text_to_save)
-                        if saved:
-                            print_system("[System] Text summarized and saved to memory inbox.\n")
-                        else:
-                            print_error("[Error] Failed to save text to memory.\n")
-                    else:
-                        print_warning("[Warning] No text provided to save.\n")
-                elif cmd == 'memorylast':
-                    last_ai_msgs = [msg for msg in reversed(chat_history) if msg.startswith("Assistant:")]
-                    if last_ai_msgs:
-                        last_response = last_ai_msgs[0][len("Assistant:"):].strip()
-                        saved = memory_manager.save_last_response_memory(last_response)
-                        if saved:
-                            print_system("[System] Last AI response summarized and saved to memory inbox.\n")
-                        else:
-                            print_error("[Error] Failed to save last AI response to memory.\n")
-                    else:
-                        print_warning("[Warning] No AI response found to save.\n")
-                elif cmd == 'reindex':
-                    print_system("[System] Re-indexing Obsidian vault, please wait...")
-                    try:
-                        vector_db_manager.index_vault()
-                        print_system("[System] Re-indexing completed.")
-                        logging.debug("[Command] Vault re-index triggered manually.")
-                    except Exception as e:
-                        print_error(f"[System] Re-indexing failed: {e}")
                 elif cmd == 'exit':
                     print_system("Goodbye!")
                     sys.exit(0)  # Immediate exit
                 continue  # Skip sending to model
 
             chat_history.append(f"User: {user_input}")
-
-            # Determine if retrieval is needed
-            need_retrieval = memory_manager.classify_need_retrieval(user_input)
-            retrieved_chunks = []
-
-            if need_retrieval:
-                retrieved_chunks = vector_db_manager.query(user_input, top_k=5)
-
-            # Prepend retrieved chunks to chat history
-            if retrieved_chunks:
-                retrieved_text = "\n\n".join(retrieved_chunks)
-                chat_history.append(f"[Retrieved knowledge]:\n{retrieved_text}")
-
 
             chat_text = concat_chat_history(
                 chat_history,
@@ -313,17 +261,6 @@ def main():
             chat_history.append(f"Assistant: {answer}")
 
             logging.debug("Model response:\n%s\n", answer)
-
-            # Async save check (can be threaded or immediate)
-            def async_save_check(text):
-                if memory_manager.classify_need_save(text):
-                    summary = memory_manager.summarize_text(text)
-                    filename = f"memory_{int(time.time())}.md"
-                    memory_manager.save_to_inbox(filename, summary)
-
-            import threading
-            threading.Thread(target=async_save_check, args=(answer,)).start()
-
 
             # Output depending on mode
             if debug_mode:

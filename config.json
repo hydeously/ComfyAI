@@ -1,6 +1,5 @@
 {
   "model_path": "models/mythomax-l2-13b.Q5_K_M.gguf",
-  "auto_index_on_startup": true,
   "context_length": 4096,
   "n_gpu_layers": 30,
   "system_prompt": "You are a helpful AI chatbot.",
