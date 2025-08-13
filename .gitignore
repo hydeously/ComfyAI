@@ -1,3 +1,5 @@
 llama-cpp-python/
 models/
 venv/
+__pycache__/
+logs/

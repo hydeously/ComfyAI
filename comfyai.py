@@ -233,6 +233,9 @@ def main():
                 summarizer=lambda msgs: summarizer_fn(llama, msgs)
             )
 
+            # Add this
+            logging.debug(f"[Token Count] Prompt token count: {count_tokens(chat_text)}")
+
             # After generating summary (you can get summary from summarizer_fn or wherever you call it)
             summary = summarizer_fn(llama, chat_history)
             logging.debug(f"[Summary] {summary}")
