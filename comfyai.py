@@ -14,6 +14,7 @@ from utils import (
     concat_chat_history,
     ensure_dir_exists,
     init_tokenizer_for_utils,
+    count_tokens,
 )
 
 # Global threading Event for animation control
@@ -232,6 +233,10 @@ def main():
                 summarizer=lambda msgs: summarizer_fn(llama, msgs)
             )
 
+            # After generating summary (you can get summary from summarizer_fn or wherever you call it)
+            summary = summarizer_fn(llama, chat_history)
+            logging.debug(f"[Summary] {summary}")
+
             prompt = format_prompt(
                 llama_template,
                 system_prompt=system_prompt,
@@ -240,6 +245,9 @@ def main():
             )
 
             logging.debug("Prompt to model:\n%s\n", prompt)
+
+            # After prompt is created:
+            logging.debug(f"[Token Count] Prompt token count: {count_tokens(prompt)}")
 
             # Start animation thread
             loading_flag.set()
