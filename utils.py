@@ -11,20 +11,17 @@ _tokenizer_llama = None
 @contextmanager
 def suppress_stderr():
     """
-    Context manager to suppress both stdout and stderr temporarily.
+    Context manager to suppress stderr temporarily.
     """
     with open(os.devnull, "w") as devnull:
-        old_stdout = sys.stdout
-        old_stderr = sys.stderr
-        sys.stdout = devnull
+        original_stderr = sys.stderr
         sys.stderr = devnull
         try:
             yield
         finally:
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+            sys.stderr = original_stderr
 
-def _init_tokenizer(model_path, context_length):
+def init_tokenizer(model_path, context_length):
     """
     Initializes a tokenizer-only Llama instance (vocab_only=True).
     """
@@ -61,7 +58,7 @@ def count_tokens(text: str) -> int:
     Returns number of tokens in text using the tokenizer llama instance.
     """
     if _tokenizer_llama is None:
-        raise RuntimeError("Tokenizer not initialized. Call init_tokenizer_for_utils first.")
+        raise RuntimeError("Tokenizer not initialized. Call init_tokenizer first.")
     return len(_tokenizer_llama.tokenize(text.encode("utf-8")))
 
 def concat_chat_history(
@@ -118,9 +115,3 @@ def ensure_dir_exists(path):
     """
     if not os.path.exists(path):
         os.makedirs(path)
-
-def init_tokenizer_for_utils(model_path, context_length):
-    """
-    Public function to initialize tokenizer instance for utils.
-    """
-    _init_tokenizer(model_path, context_length)

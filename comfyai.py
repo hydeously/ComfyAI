@@ -13,45 +13,32 @@ from utils import (
     format_prompt,
     concat_chat_history,
     ensure_dir_exists,
-    init_tokenizer_for_utils,
+    init_tokenizer,
     count_tokens,
+    suppress_stderr
 )
 
 # Global threading Event for animation control
 loading_flag = threading.Event()
 
 # ANSI color codes for CMD compatibility
-COLOR_RESET = "\033[0m"
-COLOR_RED = "\033[31m"
-COLOR_YELLOW = "\033[33m"
-COLOR_GRAY = "\033[90m"
-COLOR_LAVENDER = "\033[95m"  # Bright magenta as lavender approx.
+color_reset = "\033[0m" #reset
+color_error = "\033[31m" #red
+color_warning = "\033[33m" #yellow
+color_system = "\033[90m" #gray
+color_assistant = "\033[38;2;203;163;255m" #lavender
 
 def print_error(text):
-    print(f"{COLOR_RED}{text}{COLOR_RESET}", flush=True)
+    print(f"{color_error}{text}{color_reset}", flush=True)
 
 def print_warning(text):
-    print(f"{COLOR_YELLOW}{text}{COLOR_RESET}", flush=True)
+    print(f"{color_warning}{text}{color_reset}", flush=True)
 
 def print_system(text):
-    print(f"{COLOR_GRAY}{text}{COLOR_RESET}", flush=True)
+    print(f"{color_system}{text}{color_reset}", flush=True)
 
 def print_ai(text):
-    print(f"{COLOR_LAVENDER}{text}{COLOR_RESET}", flush=True)
-
-@contextmanager
-def suppress_stderr():
-    """
-    Context manager to suppress only stderr output temporarily.
-    """
-    with open(os.devnull, "w") as devnull:
-        old_stderr = sys.stderr
-        sys.stderr = devnull
-        try:
-            yield
-        finally:
-            sys.stderr = old_stderr
-
+    print(f"{color_assistant}{text}{color_reset}", flush=True)
 
 def setup_loggers(debug_mode, log_file_path):
     """
@@ -65,16 +52,16 @@ def setup_loggers(debug_mode, log_file_path):
     logger.setLevel(logging.DEBUG)
 
     # File handler - verbose logs
-    fh = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-    logger.addHandler(fh)
+    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+    logger.addHandler(file_handler)
 
     # Console handler - filtered by debug_mode
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG if debug_mode else logging.ERROR)
-    ch.setFormatter(logging.Formatter('%(message)s'))
-    logger.addHandler(ch)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG if debug_mode else logging.ERROR)
+    console_handler.setFormatter(logging.Formatter('%(message)s'))
+    logger.addHandler(console_handler)
 
     return logger
 
@@ -170,7 +157,7 @@ def main():
     context_length = config["context_length"]
 
     # Initialize tokenizer for utils (count_tokens, concat_chat_history)
-    init_tokenizer_for_utils(model_path, context_length)
+    init_tokenizer(model_path, context_length)
 
     if debug_mode:
         llama = Llama(
@@ -186,7 +173,7 @@ def main():
                 n_gpu_layers=config.get("n_gpu_layers", 30),
             )
 
-    print_system(f"ComfyAI started in {mode_str} mode. Type 'exit' or 'quit' to stop.\n")
+    print_system(f"ComfyAI started in {mode_str} mode. Type '/exit' to terminate.\n")
 
     chat_history = []
     system_prompt = config["system_prompt"]
@@ -198,9 +185,11 @@ def main():
     while True:
         try:
             user_input = input("User: ").strip()
-            if user_input.lower() in ("exit", "quit"):
-                print_system("Goodbye!")
-                break
+
+            # Start animation thread
+            loading_flag.set()
+            anim_thread = threading.Thread(target=loading_animation)
+            anim_thread.start()
 
             # Handle internal commands without sending to model
             if is_command(user_input, commands):
@@ -221,7 +210,7 @@ def main():
                     )
                 elif cmd == 'exit':
                     print_system("Goodbye!")
-                    sys.exit(0)  # Immediate exit
+                    return # replace with sys.exit(0) for immediate exit
                 continue  # Skip sending to model
 
             chat_history.append(f"User: {user_input}")
@@ -252,11 +241,6 @@ def main():
             # After prompt is created:
             logging.debug(f"[Token Count] Prompt token count: {count_tokens(prompt)}")
 
-            # Start animation thread
-            loading_flag.set()
-            anim_thread = threading.Thread(target=loading_animation)
-            anim_thread.start()
-
             if debug_mode:
                 response = llama(prompt=prompt, max_tokens=256, stop=["[/INST]"])
             else:
@@ -275,7 +259,6 @@ def main():
 
             # Output depending on mode
             if debug_mode:
-                print(f"User (prompt):\n{prompt}\n")
                 print_ai(f"ComfyAI: {answer}\n")
             else:
                 print_ai(f"ComfyAI: {answer}\n")
