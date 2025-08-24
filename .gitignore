@@ -2,4 +2,7 @@ llama-cpp-python/
 models/
 venv/
 __pycache__/
+chroma_db/
 logs/
+cat.wav
+demo.py
