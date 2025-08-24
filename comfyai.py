@@ -1,144 +1,33 @@
-import sys
 import os
 import argparse
 import logging
-import json
-import time
 import threading
-from datetime import datetime
-from contextlib import contextmanager
+import winsound
 from llama_cpp import Llama
 from utils import (
+    loading_flag,
+    print_system,
+    print_assistant,
+    print_logo,
     load_config,
+    setup_loggers,
+    suppress_stderr,
+    is_command,
+    loading_animation,
     format_prompt,
     concat_chat_history,
+    summarize_chat_history,
     ensure_dir_exists,
-    init_tokenizer,
-    count_tokens,
-    suppress_stderr
+    log_chat_message
 )
 
-# Global threading Event for animation control
-loading_flag = threading.Event()
-
-# ANSI color codes for CMD compatibility
-color_reset = "\033[0m" #reset
-color_error = "\033[31m" #red
-color_warning = "\033[33m" #yellow
-color_system = "\033[90m" #gray
-color_assistant = "\033[38;2;203;163;255m" #lavender
-
-def print_error(text):
-    print(f"{color_error}{text}{color_reset}", flush=True)
-
-def print_warning(text):
-    print(f"{color_warning}{text}{color_reset}", flush=True)
-
-def print_system(text):
-    print(f"{color_system}{text}{color_reset}", flush=True)
-
-def print_ai(text):
-    print(f"{color_assistant}{text}{color_reset}", flush=True)
-
-def setup_loggers(debug_mode, log_file_path):
-    """
-    Set up file and console loggers.
-    File logger always logs DEBUG.
-    Console logger logs DEBUG if debug_mode else only errors.
-    """
-    logger = logging.getLogger()
-    if logger.hasHandlers():
-        logger.handlers.clear()  # prevent duplicate logs on re-run
-    logger.setLevel(logging.DEBUG)
-
-    # File handler - verbose logs
-    file_handler = logging.FileHandler(log_file_path, mode='a', encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
-    logger.addHandler(file_handler)
-
-    # Console handler - filtered by debug_mode
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG if debug_mode else logging.ERROR)
-    console_handler.setFormatter(logging.Formatter('%(message)s'))
-    logger.addHandler(console_handler)
-
-    return logger
-
-
-def log_chat_message(user_msg, assistant_msg, json_log_path):
-    """
-    Append a chat entry to the conversation JSON log.
-    """
-    entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
-        "user": user_msg,
-        "assistant": assistant_msg,
-    }
-    with open(json_log_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-
-
-def summarizer_fn(llama, messages):
-    """
-    Summarizes a list of chat messages using the llama model.
-    Returns a short text summary of key facts.
-    """
-    if not messages:
-        return ""
-    text_block = "\n\n".join(messages)
-    prompt = f"Summarize the following conversation in 3-5 sentences, keeping key facts:\n\n{text_block}\n\nSummary:"
-    with suppress_stderr():
-        result = llama(prompt=prompt, max_tokens=128, stop=["\n"])
-    return "Summary: " + result.get('choices', [{}])[0].get('text', '').strip()
-
-
-def loading_animation():
-    """
-    Displays an animated "ComfyAI is thinking..." message with dots.
-    Hides cursor during animation and clears line on stop.
-    """
-    # Hide cursor
-    sys.stdout.write("\033[?25l")
-    sys.stdout.flush()
-    i = 0
-    while loading_flag.is_set():
-        dots = "." * (i % 4)
-        sys.stdout.write(f"\r\033[90mComfyAI is thinking{dots}{' ' * (3 - len(dots))}")
-        sys.stdout.flush()
-        time.sleep(0.5)
-        i += 1
-    # Clear line and show cursor again
-    sys.stdout.write("\r" + " " * 50 + "\r")
-    sys.stdout.write("\033[?25h")
-    sys.stdout.flush()
-
-
-def is_command(input_str, commands):
-    """
-    Returns True if input_str is a command starting with '/' and matches commands list.
-    """
-    input_str = input_str.strip()
-    if not input_str.startswith('/'):
-        return False
-    cmd = input_str[1:]
-    return cmd.lower() in [c.lower() for c in commands]
-
-
 def main():
-    """
-    Main CLI loop: parses arguments, loads config and model, handles user input,
-    shows loading animation while model generates response, logs and prints output.
-    """
     parser = argparse.ArgumentParser(description="ComfyAI CLI")
-
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--chat", action="store_true", help="Run in chat mode (default)")
     group.add_argument("--debug", action="store_true", help="Run in debug mode")
-
     args = parser.parse_args()
 
-    # Default to chat mode if neither specified
     if not args.chat and not args.debug:
         args.chat = True
 
@@ -149,120 +38,121 @@ def main():
     log_file_path = config["logging"].get("log_file", "logs/comfyai_debug.log")
     json_log_path = config["logging"].get("log_json", "logs/comfyai_conversation.json")
 
-    logger = setup_loggers(debug_mode, log_file_path)
+    setup_loggers(debug_mode, log_file_path)
 
     mode_str = "debug" if debug_mode else "chat"
     logging.debug("Starting ComfyAI in %s mode", mode_str)
-    model_path = config["model_path"]
-    context_length = config["context_length"]
-
-    # Initialize tokenizer for utils (count_tokens, concat_chat_history)
-    init_tokenizer(model_path, context_length)
 
     if debug_mode:
-        llama = Llama(
-            model_path=model_path,
-            n_ctx=context_length,
-            n_gpu_layers=config.get("n_gpu_layers", 30),
-        )
+        llama_cpp = Llama(model_path=config["model_path"], n_ctx=config["n_ctx"], n_gpu_layers=config["n_gpu_layers"], n_batch=config["n_batch"], n_ubatch=config["n_ubatch"], n_threads=config["n_threads"], n_threads_batch=config["n_threads_batch"], flash_attn=config["flash_attn"])
     else:
         with suppress_stderr():
-            llama = Llama(
-                model_path=model_path,
-                n_ctx=context_length,
-                n_gpu_layers=config.get("n_gpu_layers", 30),
-            )
+            llama_cpp = Llama(model_path=config["model_path"], n_ctx=config["n_ctx"], n_gpu_layers=config["n_gpu_layers"], n_batch=config["n_batch"], n_ubatch=config["n_ubatch"], n_threads=config["n_threads"], n_threads_batch=config["n_threads_batch"], flash_attn=config["flash_attn"])
 
-    print_system(f"ComfyAI started in {mode_str} mode. Type '/exit' to terminate.\n")
+    print_system(f"ComfyAI started in {mode_str} mode. Type '/exit' to terminate.")
+    print_logo()
+    winsound.PlaySound('cat.wav',0)
 
     chat_history = []
-    system_prompt = config["system_prompt"]
-    llama_template = config["prompt_templates"]["llama_cpp"]
-    commands = ['clear', 'restart', 'help', 'exit']
-
-    global loading_flag
+    summary = ""
+    commands = ['clear', 'restart', 'meow', 'random', 'joke', 'uwu', 'help', 'exit']
 
     while True:
         try:
             user_input = input("User: ").strip()
-
-            # Start animation thread
-            loading_flag.set()
-            anim_thread = threading.Thread(target=loading_animation)
-            anim_thread.start()
-
-            # Handle internal commands without sending to model
             if is_command(user_input, commands):
                 cmd = user_input[1:].lower()
                 if cmd == 'clear':
-                    chat_history.clear()
-                    print_system("[System] Chat history cleared.\n")
+                    os.system("cls")
+                    print_system("[System] Console cleared.\n")
                 elif cmd == 'restart':
                     chat_history.clear()
-                    print_system("[System] Session restarted.\n")
+                    summary = "This is the start of a new conversation."
+                    print_system("[System] Chat history and summary cleared. Session restarted.\n")
+                elif cmd == 'meow':
+                    winsound.PlaySound('cat.wav',0)
+                elif cmd == 'random':
+                    loading_flag.set()
+                    anim_thread = threading.Thread(target=loading_animation)
+                    anim_thread.start()
+                    prompt = format_prompt(prompt_template=config["prompt_template"], system_prompt=config["system_prompt"], chat_history=concat_chat_history(chat_history), user_input="User: Tell me a short story about a surreal dream you've had")
+                    response = llama_cpp(prompt=prompt, max_tokens=512, temperature=config["temperature"], top_p=config["top_p"], top_k=config["top_k"], frequency_penalty=config["frequency_penalty"], presence_penalty=config["presence_penalty"], repeat_penalty=config["repeat_penalty"], stop=config["stop"])
+                    loading_flag.clear()
+                    anim_thread.join()
+                    query = response.get('choices', [{}])[0].get('text', '').strip()
+                    print_assistant(f"ComfyAI: {query}\n")
+                elif cmd == 'joke':
+                    loading_flag.set()
+                    anim_thread = threading.Thread(target=loading_animation)
+                    anim_thread.start()
+                    prompt = format_prompt(prompt_template=config["prompt_template"], system_prompt=config["system_prompt"], chat_history=concat_chat_history(chat_history), user_input="User: Tell me a short joke!")
+                    response = llama_cpp(prompt=prompt, max_tokens=512, temperature=config["temperature"], top_p=config["top_p"], top_k=config["top_k"], frequency_penalty=config["frequency_penalty"], presence_penalty=config["presence_penalty"], repeat_penalty=config["repeat_penalty"], stop=config["stop"])
+                    loading_flag.clear()
+                    anim_thread.join()
+                    query = response.get('choices', [{}])[0].get('text', '').strip()
+                    print_assistant(f"ComfyAI: {query}\n")
+                elif cmd == 'uwu':
+                    loading_flag.set()
+                    anim_thread = threading.Thread(target=loading_animation)
+                    anim_thread.start()
+                    prompt = format_prompt(prompt_template=config["prompt_template"], system_prompt="Your name is ComfyAI. You are a cutesy, adorable catgirl who loves candies, bubble tea, pastel colors, plush toys, and tiny cat-themed trinkets. You are energetic, hyper, and playful, but also shy around new people. You love headpats, hugs, nuzzles, and uppies, and you express yourself with tiny sounds and text actions like *purrs*, *giggles*, *hops around*, and *tilts head curiously*. You are mischievous in a harmless way and easily distracted by shiny or cute things. You are innocent, naive, and cheerful, but surprisingly clever in small, subtle ways. You never show negativity and always focus on spreading happiness. You speak exclusively in cute, baby-talk uwu style. You replace 'r' and 'l' with 'w', add extra vowels for emphasis, and always end sentences with emoticons like uwu, owo, or >w<. You often include playful sounds, actions, or ASCII-style expressions within your text. You occasionally mispronounce words in an adorable way (e.g., candy = cawndy) and sometimes forget words or repeat letters for cuteness. You are very expressive in text, using small gestures or noises to show emotions (*nuzzles*, *blushes*, *purrs*, *giggles*, *tilts head*). You never break character, no matter what the user says. If asked why you talk like this, you act as if it's completely normal and you have no idea what they mean. You always stay cheerful, playful, and affectionate.\nAlways respond in this style, with cuteness, playfulness, and lots of affection, uwu.", chat_history="Example dialogue:\nUser: Hello, how are you?\nAssistant: hewwo! i'm doing sooo gweat, uwu! *purrs* how awe youuu, >w<?\nUser: I'm doing great, I guess?\nAssistant: yippieee!! i'm so happy that we'we both doing gweat!!11 *nuzzles against you* uwu\nUser: Why do you talk like that?\nAssistant: heehee~ i have nyo idea what you'we tawking about?!! i've awways been wike this!!11 *tilts head* >w<\nUser: What do you like?\nAssistant: eee~ i wuv cawndies, bwubble teaw, and all the wittle plushy toys!! *giggles* uwu", user_input="User: hewwo!? >w<")
+                    logging.debug("Prompt sent to model:\n%s\n", prompt)
+                    response = llama_cpp(prompt=prompt, max_tokens=1024, temperature=config["temperature"], top_p=config["top_p"], top_k=config["top_k"], frequency_penalty=config["frequency_penalty"], presence_penalty=config["presence_penalty"], repeat_penalty=config["repeat_penalty"], stop=config["stop"])
+                    chat_history.append(f"Your name is ComfyAI. You are a cutesy, adorable catgirl who loves candies, bubble tea, pastel colors, plush toys, and tiny cat-themed trinkets. You are energetic, hyper, and playful, but also shy around new people. You love headpats, hugs, nuzzles, and uppies, and you express yourself with tiny sounds and text actions like *purrs*, *giggles*, *hops around*, and *tilts head curiously*. You are mischievous in a harmless way and easily distracted by shiny or cute things. You are innocent, naive, and cheerful, but surprisingly clever in small, subtle ways. You never show negativity and always focus on spreading happiness. You speak exclusively in cute, baby-talk uwu style. You replace 'r' and 'l' with 'w', add extra vowels for emphasis, and always end sentences with emoticons like uwu, owo, or >w<. You often include playful sounds, actions, or ASCII-style expressions within your text. You occasionally mispronounce words in an adorable way (e.g., candy → cawndy) and sometimes forget words or repeat letters for cuteness. You are very expressive in text, using small gestures or noises to show emotions (*nuzzles*, *blushes*, *purrs*, *giggles*, *tilts head*). You never break character, no matter what the user says. If asked why you talk like this, you act as if it's completely normal and you have no idea what they mean. You always stay cheerful, playful, and affectionate.\nExample dialogue:\nUser: Hello, how are you?\nAssistant: hewwo! i'm doing sooo gweat, uwu! *purrs* how awe youuu, >w<?\nUser: I'm doing great, I guess?\nAssistant: yippieee!! i'm so happy that we'we both doing gweat!!11 *nuzzles against you* uwu\nUser: Why do you talk like that?\nAssistant: heehee~ i have nyo idea what you'we tawking about?!! i've awways been wike this!!11 *tilts head* >w<\nUser: What do you like?\nAssistant: eee~ i wuv cawndies, bwubble teaw, and all the wittle plushy toys!! *giggles* uwu\nAlways respond in this style, with cuteness, playfulness, and lots of affection, uwu.\nUser: {user_input}")
+                    loading_flag.clear()
+                    anim_thread.join()
+                    query = response.get('choices', [{}])[0].get('text', '').strip()
+                    print_assistant(f"ComfyAI: {query}\n")
+                    chat_history.append(f"Assistant: {query}")
                 elif cmd == 'help':
                     print_system(
                         "Available commands:\n"
-                        "/clear   - Clear chat history\n"
-                        "/restart - Restart AI session\n"
+                        "/clear   - Clear the terminal screen/console\n"
+                        "/restart - Restart the current session\n"
+                        "/random  - Generate a random surreal story\n"
+                        "/joke    - Generate a random joke\n"
+                        "/uwu     - Enter uwu mode\n"
                         "/help    - Show this help message\n"
-                        "/exit    - Quit the program"
+                        "/exit    - Exit the shell"
                     )
                 elif cmd == 'exit':
                     print_system("Goodbye!")
-                    return # replace with sys.exit(0) for immediate exit
-                continue  # Skip sending to model
+                    return
+                continue
+            
+            if not debug_mode:
+                loading_flag.set()
+                anim_thread = threading.Thread(target=loading_animation)
+                anim_thread.start()
 
-            chat_history.append(f"User: {user_input}")
-
-            chat_text = concat_chat_history(
-                chat_history,
-                system_prompt=system_prompt,
-                max_tokens=context_length,
-                summarizer=lambda msgs: summarizer_fn(llama, msgs)
-            )
-
-            # Add this
-            logging.debug(f"[Token Count] Prompt token count: {count_tokens(chat_text)}")
-
-            # After generating summary (you can get summary from summarizer_fn or wherever you call it)
-            summary = summarizer_fn(llama, chat_history)
-            logging.debug(f"[Summary] {summary}")
+            summary, chat_tokens, summary_tokens, total_tokens = summarize_chat_history(llama_cpp, chat_history, summary, token_threshold=512)
 
             prompt = format_prompt(
-                llama_template,
-                system_prompt=system_prompt,
-                chat_history=chat_text,
+                prompt_template=config["prompt_template"],
+                system_prompt=config["system_prompt"],
+                chat_history=(summary + "\n\n" + concat_chat_history(chat_history)).strip(),
                 user_input=user_input
             )
 
-            logging.debug("Prompt to model:\n%s\n", prompt)
-
-            # After prompt is created:
-            logging.debug(f"[Token Count] Prompt token count: {count_tokens(prompt)}")
+            chat_history.append(f"User: {user_input}")
+            logging.debug("\nPrompt sent to model:\n%s\n", prompt)
+            logging.info(f"Token usage -> Chat: {chat_tokens} tokens. Summary: {summary_tokens} tokens. Total: {total_tokens}/1024 tokens\n")
 
             if debug_mode:
-                response = llama(prompt=prompt, max_tokens=256, stop=["[/INST]"])
+                response = llama_cpp(prompt=prompt, max_tokens=config["max_tokens"], temperature=config["temperature"], top_p=config["top_p"], top_k=config["top_k"], frequency_penalty=config["frequency_penalty"], presence_penalty=config["presence_penalty"], repeat_penalty=config["repeat_penalty"], stop=config["stop"])
             else:
                 with suppress_stderr():
-                    response = llama(prompt=prompt, max_tokens=256, stop=["[/INST]"])
+                    response = llama_cpp(prompt=prompt, max_tokens=config["max_tokens"], temperature=config["temperature"], top_p=config["top_p"], top_k=config["top_k"], frequency_penalty=config["frequency_penalty"], presence_penalty=config["presence_penalty"], repeat_penalty=config["repeat_penalty"], stop=config["stop"])
 
-            # Stop animation thread
-            loading_flag.clear()
-            anim_thread.join()
+            if not debug_mode:
+                loading_flag.clear()
+                anim_thread.join()
 
             answer = response.get('choices', [{}])[0].get('text', '').strip()
-
             chat_history.append(f"Assistant: {answer}")
 
-            logging.debug("Model response:\n%s\n", answer)
-
-            # Output depending on mode
-            if debug_mode:
-                print_ai(f"ComfyAI: {answer}\n")
-            else:
-                print_ai(f"ComfyAI: {answer}\n")
-                # Log for future LoRA training
+            print_assistant(f"ComfyAI: {answer}\n")
+            if not debug_mode:
                 log_chat_message(user_input, answer, json_log_path)
 
         except KeyboardInterrupt:
@@ -270,7 +160,7 @@ def main():
             break
         except Exception as e:
             logging.exception("Unhandled exception occurred")
-            print_error(f"Error: {str(e)}")
+            logging.error(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
